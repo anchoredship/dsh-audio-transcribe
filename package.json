@@ -1,0 +1,60 @@
+{
+  "name": "dsh-audio-transcribe",
+  "version": "0.1.0",
+  "description": "Offline audio-to-text for DeepSeek Harness: transcribe local audio with the SenseVoice model, record system playback from a floating widget, and keep both fully local.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "assets",
+    "bin",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "audio",
+    "transcribe",
+    "speech-to-text",
+    "asr",
+    "sensevoice",
+    "wasapi",
+    "loopback",
+    "system-audio",
+    "offline",
+    "windows"
+  ],
+  "license": "MIT",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
+    }
+  }
+}

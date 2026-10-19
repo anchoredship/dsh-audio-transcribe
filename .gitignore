@@ -1,0 +1,16 @@
+# Diagnostics kept from development, disabled by rename rather than deleted.
+*.disabled
+
+# Local artifacts
+node_modules/
+*.tgz
+output/
+recordings/
+*.wav
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

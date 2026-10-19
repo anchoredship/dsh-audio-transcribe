@@ -1,0 +1,3 @@
+- insert:
+    - id: audio-transcribe
+      name: dsh-audio-transcribe

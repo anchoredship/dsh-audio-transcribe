@@ -1,0 +1,15 @@
+# Normalize line endings in the repository; check out CRLF on Windows so the
+# PowerShell/CMD-adjacent files behave natively.
+* text=auto eol=crlf
+
+# Scripts and configs the runtimes parse: keep LF so they behave identically
+# everywhere.
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+
+# Binaries must never be touched by line-ending conversion.
+*.dll        binary
+*.exe        binary
+*.onnx       binary
