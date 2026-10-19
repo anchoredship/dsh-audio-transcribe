@@ -45,6 +45,15 @@ is absent, run `audio_model_download` once.
 
 ---
 
+## What it looks like
+
+The expanded widget, with a recording in progress and three past recordings
+(two already transcribed):
+
+<p align="center">
+  <a href="docs/widget.svg"><img src="docs/widget.svg" width="420" alt="recording widget"></a>
+</p>
+
 ## What it gives you
 
 ### Three model tools
@@ -216,6 +225,17 @@ degrades to "no widget" instead of a broken app.
 the process instead leaves the RIFF header unwritten, which every decoder reads
 as **0 seconds** — a 250 KB file that transcribes to nothing. The recorder only
 falls back to a hard kill if the child ignores the signal for 8 seconds.
+
+---
+
+## License
+
+[MIT](LICENSE). The NAudio assemblies bundled in `bin/` are also MIT
+(see LICENSE for attribution). The SenseVoice model is downloaded at runtime and
+is not distributed by this repository.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md), and check
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) before filing an issue.
 
 ---
 
