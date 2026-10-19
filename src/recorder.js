@@ -132,17 +132,19 @@ export function createRecorder(options) {
       logger?.warn?.(`[audio-transcribe] could not signal stop: ${error?.message ?? error}`)
     }
 
+    // Wait for the child to finalise the WAV and exit. `once('exit')` settles
+    // the promise; the timeout is the escape hatch for a hung process.
+    const STOP_TIMEOUT_MS = 8000
     const exited = await new Promise((resolve) => {
       let settled = false
       const done = (value) => {
-        if (!settled) {
-          settled = true
-          resolve(value)
-        }
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
       }
+      const timer = setTimeout(() => done(false), STOP_TIMEOUT_MS)
       state.child.once('exit', () => done(true))
-      const deadline = setTimeout(() => done(false), 8000)
-      state.child.once('exit', () => clearTimeout(deadline))
     })
 
     if (!exited) {
@@ -153,6 +155,7 @@ export function createRecorder(options) {
       } catch {
         /* already gone */
       }
+      // Let the SIGKILL land so the exit handler can publish `last`.
       await new Promise((r) => setTimeout(r, 300))
     }
 

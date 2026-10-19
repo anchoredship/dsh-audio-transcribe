@@ -13,11 +13,9 @@
   var API = '/dsh-audio'
   var POLL_MS = 1000
   var STORAGE_KEY = 'dshAudioWidget.position'
-  var COLLAPSED_KEY = 'dshAudioWidget.collapsed'
 
   var state = {
     open: false,
-    collapsed: false,
     running: false,
     seconds: 0,
     bytes: 0,

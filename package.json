@@ -16,20 +16,12 @@
     "README.md",
     "LICENSE"
   ],  "keywords": [
-    "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "cordis",
-    "audio",
-    "transcribe",
     "speech-to-text",
-    "asr",
     "sensevoice",
-    "wasapi",
-    "loopback",
     "system-audio",
-    "offline",
-    "windows"
+    "offline"
   ],
   "license": "MIT",
   "os": [

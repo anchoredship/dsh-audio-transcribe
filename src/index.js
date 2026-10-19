@@ -227,16 +227,13 @@ function quietRatio(samples16k) {
   return total ? quiet / total : 0
 }
 
-/**
- * No module-level `inject`.
- *
- * `tools` is an agent-scoped service. Declaring it here makes the plugin wait
- * for a service the host plane never provides, and cordis reports that as a
- * silent PENDING — the plugin appears loaded while registering nothing. The
- * bundled free-search plugin uses the same shape: inject `tools` locally and
- * register inside that callback.
- */
-export const inject = []
+// No module-level `inject` export, deliberately.
+//
+// `tools` is an agent-scoped service. Declaring it at module level makes the
+// plugin wait for a service the host plane never provides, and cordis reports
+// that as a silent PENDING — the plugin appears loaded while registering
+// nothing. `tools` and `webServer` are therefore injected locally inside
+// apply(), where the callbacks fire once the services exist.
 
 /**
  * Register the transcription tool surface.

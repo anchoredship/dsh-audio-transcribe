@@ -5,7 +5,6 @@
  * action — spawning the capture process, moving the storage directory,
  * transcribing the result — happens here.
  */
-import { readFileSync, existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -16,6 +15,61 @@ export const ROUTE_PREFIX = '/dsh-audio'
 
 const SETTINGS_NS = 'audio-transcribe'
 const DEFAULT_RECORD_DIR = (dshHome) => path.join(dshHome, 'audio-transcribe', 'recordings')
+
+/**
+ * Whether a Host header names this machine.
+ *
+ * The host binds loopback by default, but a rebound DNS name or a forged Host
+ * still arrives as a normal HTTP request. Only `localhost`, `::1` and `127/8`
+ * are accepted; anything else is a browser talking to us from a page it did not
+ * load from here.
+ */
+function isLoopbackHost(hostHeader) {
+  if (typeof hostHeader !== 'string' || hostHeader.length === 0) return false
+  // Strip the port, keeping IPv6 literals intact.
+  let host = hostHeader.trim().toLowerCase()
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(host)
+  if (bracketed) host = bracketed[1]
+  else if (!host.includes(':') || host.split(':').length === 2) host = host.split(':')[0]
+
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  if (host === '::1') return true
+  const m = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (!m) return false
+  return m.slice(1).every((part) => Number(part) <= 255)
+}
+
+/**
+ * Reject requests that did not come from a page served by this host.
+ *
+ * These routes can start a recording and read the storage directory, so a
+ * cross-site request must never reach them: without this, any page the user
+ * visits could begin recording or enumerate their recordings.
+ *
+ * @returns null when the request is acceptable, otherwise an HTTP status code.
+ */
+function trustRejection(req) {
+  const headers = req.headers ?? {}
+
+  // A browser cannot forge these; a rebound DNS name cannot fix them.
+  const site = String(headers['sec-fetch-site'] ?? '').toLowerCase()
+  if (site && site !== 'same-origin' && site !== 'none') return 403
+
+  if (!isLoopbackHost(headers.host)) return 403
+
+  // When an Origin is present it must be the same origin.
+  const origin = headers.origin
+  if (origin) {
+    try {
+      const url = new URL(String(origin))
+      if (!isLoopbackHost(url.host)) return 403
+      if (String(headers.host).toLowerCase() !== url.host.toLowerCase()) return 403
+    } catch {
+      return 403
+    }
+  }
+  return null
+}
 
 function json(res, code, body) {
   const payload = JSON.stringify(body)
@@ -91,7 +145,7 @@ export function mountAudioUi(root, options) {
     const svc = settingsService()
     if (!svc?.mutate) return { persisted: false }
     try {
-      await settings.mutate(SETTINGS_NS, [{ op: 'set', path: ['recordDir'], value: dir }])
+      await svc.mutate(SETTINGS_NS, [{ op: 'set', path: ['recordDir'], value: dir }])
       return { persisted: true }
     } catch (error) {
       logger?.warn?.(`[audio-transcribe] could not persist recordDir: ${error?.message ?? error}`)
@@ -99,14 +153,28 @@ export function mountAudioUi(root, options) {
     }
   }
 
-  /** Queue transcriptions so a long clip does not block the status poll. */
+  /**
+   * Queue transcriptions so a long clip does not block the status poll.
+   * Bounded: this runs for the lifetime of the process, and one entry per
+   * recording would otherwise grow forever.
+   */
+  const TRANSCRIPT_HISTORY = 50
   const transcriptState = new Map() // wavPath -> 'pending' | 'done' | 'failed'
   let transcribing = 0
+
+  function noteTranscript(file, state) {
+    transcriptState.delete(file) // keep insertion order meaningful
+    transcriptState.set(file, state)
+    while (transcriptState.size > TRANSCRIPT_HISTORY) {
+      const oldest = transcriptState.keys().next().value
+      transcriptState.delete(oldest)
+    }
+  }
 
   async function autoTranscribe(recording) {
     if (!transcribe) return
     if (!recording?.ok) return
-    transcriptState.set(recording.file, 'pending')
+    noteTranscript(recording.file, 'pending')
     transcribing++
     try {
       const result = await transcribe(recording.file)
@@ -114,12 +182,12 @@ export function mountAudioUi(root, options) {
       if (text) {
         const txt = recording.file.replace(/\.wav$/i, '.txt')
         await fs.writeFile(txt, text + '\n', 'utf8')
-        transcriptState.set(recording.file, 'done')
+        noteTranscript(recording.file, 'done')
       } else {
-        transcriptState.set(recording.file, 'failed')
+        noteTranscript(recording.file, 'failed')
       }
     } catch (error) {
-      transcriptState.set(recording.file, 'failed')
+      noteTranscript(recording.file, 'failed')
       logger?.warn?.(`[audio-transcribe] auto-transcribe failed: ${error?.message ?? error}`)
     } finally {
       transcribing--
@@ -135,9 +203,26 @@ export function mountAudioUi(root, options) {
 
   // ---- routes ------------------------------------------------------------
 
-  function route(kind, p, handler) {
+  /**
+   * Register a route behind the trust fence.
+   * @param methods - allowed HTTP methods; omit to accept any.
+   */
+  function route(kind, p, handler, methods) {
+    const allowed = methods === undefined ? null : Array.isArray(methods) ? methods : [methods]
+    const guarded = async (req, res) => {
+      const rejection = trustRejection(req)
+      if (rejection !== null) {
+        json(res, rejection, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (allowed !== null && !allowed.includes(req.method)) {
+        json(res, 405, { ok: false, error: `use ${allowed.join(' or ')}` })
+        return
+      }
+      return handler(req, res)
+    }
     try {
-      disposers.push(webServer.register({ kind, path: p, handler }))
+      disposers.push(webServer.register({ kind, path: p, handler: guarded }))
     } catch (error) {
       logger?.warn?.(`[audio-transcribe] route ${p} failed: ${error?.message ?? error}`)
     }
@@ -169,7 +254,7 @@ export function mountAudioUi(root, options) {
     } catch (error) {
       json(res, 400, { ok: false, error: String(error?.message ?? error) })
     }
-  })
+  }, 'POST')
 
   route('exact', `${ROUTE_PREFIX}/stop.json`, async (req, res) => {
     try {
@@ -178,8 +263,9 @@ export function mountAudioUi(root, options) {
     } catch (error) {
       json(res, 500, { ok: false, error: String(error?.message ?? error) })
     }
-  })
+  }, 'POST')
 
+  // GET reads the current directory; POST moves it.
   route('exact', `${ROUTE_PREFIX}/dir.json`, async (req, res) => {
     try {
       if (req.method === 'GET') {
@@ -189,6 +275,15 @@ export function mountAudioUi(root, options) {
       const { dir } = await readBody(req)
       if (typeof dir !== 'string' || !dir.trim()) throw new Error('dir is required')
       const next = dir.trim()
+      // A UNC path would make the recorder write across the network, and a
+      // system directory must never receive recordings.
+      if (next.startsWith('\\\\') || next.startsWith('//')) {
+        throw new Error('network (UNC) paths are not supported')
+      }
+      const systemRoot = path.parse(next).root
+      if (path.normalize(next).toLowerCase() === systemRoot.toLowerCase()) {
+        throw new Error('refusing to use a drive root as the storage directory')
+      }
       await ensureWritableDir(next)
       const persisted = await persistRecordDir(next)
       json(res, 200, { ok: true, direction: next, ...persisted })
@@ -265,19 +360,14 @@ export function mountAudioUi(root, options) {
     } finally {
       res.off('close', onClose)
     }
-  })
+  }, 'POST')
 
   // Serve the widget script from the package, so the injected tag stays valid
   // even after the plugin is reinstalled or edited in place.
   const uiFile = path.join(packageRoot, 'assets', 'audio-ui.js')
-  route('exact', `${ROUTE_PREFIX}/ui.js`, (req, res) => {
+  route('exact', `${ROUTE_PREFIX}/ui.js`, async (req, res) => {
     try {
-      if (!existsSync(uiFile)) {
-        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-        res.end('audio widget not built')
-        return
-      }
-      const body = readFileSync(uiFile)
+      const body = await fs.readFile(uiFile)
       res.writeHead(200, {
         'Content-Type': 'application/javascript; charset=utf-8',
         'Cache-Control': 'no-store',
@@ -285,10 +375,15 @@ export function mountAudioUi(root, options) {
       })
       res.end(body)
     } catch (error) {
+      if (error?.code === 'ENOENT') {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('audio widget not built')
+        return
+      }
       res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
       res.end(String(error?.message ?? error))
     }
-  })
+  }, 'GET')
 
   // ---- index injection ---------------------------------------------------
   // On the desktop shell the index.html is served from the packaged dist and

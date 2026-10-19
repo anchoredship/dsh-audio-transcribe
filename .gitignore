@@ -8,6 +8,18 @@ output/
 recordings/
 *.wav
 
+# Secrets and environment files. This plugin needs neither today, but anyone
+# editing a fork might add one, and a committed .env is a leaked credential.
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
 # Editor / OS noise
 .vscode/
 .idea/
