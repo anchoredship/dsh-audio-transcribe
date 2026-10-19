@@ -11,17 +11,37 @@ Everything runs locally: no API key, no upload, no network at transcription time
 
 ## Install
 
-```powershell
-# from GitHub
-dsh plugin --profile web add github:<owner>/dsh-audio-transcribe
+### Recommended: clone and install from the checkout
 
-# or from a local checkout
+```powershell
+git clone https://github.com/<owner>/dsh-audio-transcribe
 dsh plugin --profile web add file:D:\path\to\dsh-audio-transcribe
 ```
 
-Restart DSH. The demo works without any extra download because it reuses the
-SenseVoice cache that DSH's own voice input already prepared — if that cache is
-absent, run `audio_model_download` once.
+A `file:` install resolves straight from disk. It skips registry resolution
+entirely, so there is nothing for pnpm's build-script gate to block and no
+network to depend on. Use the absolute path, and keep the `file:` prefix — a
+bare `.\dir` becomes a `link:` symlink, and Node then resolves the plugin's
+DSH peer packages from the symlink target and fails to find them.
+
+### Alternative: install from GitHub
+
+```powershell
+dsh plugin --profile web add github:<owner>/dsh-audio-transcribe
+```
+
+This fetches the sources and installs them through the registry. This plugin has
+no `install` / `postinstall` / `prepare` scripts and no native dependencies, so
+it should not trip pnpm's build-script policy. If pnpm does refuse with
+`ERR_PNPM_IGNORED_BUILDS`, it is naming *some other* package being pulled in as a
+transitive dependency — follow its prompt to allow that package, or use the
+`file:` route above instead.
+
+### Then
+
+Restart DSH. Transcription works without any extra download because it reuses
+the SenseVoice cache that DSH's own voice input already prepared — if that cache
+is absent, run `audio_model_download` once.
 
 ---
 
