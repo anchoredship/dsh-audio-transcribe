@@ -3,6 +3,56 @@
 Most failures here are environment issues rather than bugs. Start from the
 symptom.
 
+## Installation fails
+
+### `ERR_PNPM_IGNORED_BUILDS`
+
+pnpm 10 and later refuse to run dependency build scripts unless the user allows
+them. Read the list it prints: this plugin has no `install`, `postinstall` or
+`prepare` script and no native dependencies, so a package named there is a
+*transitive* dependency, not this one.
+
+Either allow the named package as pnpm suggests, or sidestep the registry path
+entirely:
+
+```powershell
+git clone https://github.com/<owner>/dsh-audio-transcribe
+dsh plugin --profile web add file:D:\absolute\path\to\dsh-audio-transcribe
+```
+
+### `ERR_MODULE_NOT_FOUND` for `@deepseek-ai/*`
+
+A local install used a bare path, which becomes a `link:` symlink. Node then
+resolves the plugin's DSH peer packages relative to the symlink target instead of
+the profile, and finds nothing.
+
+Fix: use the `file:` prefix with an absolute path.
+
+```powershell
+dsh plugin --profile web add file:D:\absolute\path\to\dsh-audio-transcribe
+```
+
+### `Plugin is incompatible with dsh` / peer range mismatch
+
+DSH ships prerelease versions (`0.2.0-rc.2`). A naive range such as
+`>=0.1.0 <0.3.0` matches no prerelease at all. This package pins exact peer
+versions, so the usual cause is a newer DSH whose runtime no longer matches.
+
+Check what the install prompt says about the specific peer, and report it — the
+peer range needs updating rather than working around.
+
+### Install succeeded but no tools
+
+The bundle is installed but not loaded. Check that it is in the profile's
+`dsh.profile.bundles`, then restart DSH. A prerequisite version mismatch is
+usually visible at startup as a yellow warning rather than an error.
+
+### The plugin was skipped at boot
+
+A bundle whose manifest or patch fails to load is skipped rather than fatal, and
+the launcher prints the skipped list once per start. Look for a line naming this
+package in the startup output; it carries the reason.
+
 ## The widget pill does not appear
 
 Injection is the most fragile part, and it fails silently by design — a broken
