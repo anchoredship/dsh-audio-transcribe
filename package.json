@@ -15,8 +15,7 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
-  ],
-  "keywords": [
+  ],  "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
