@@ -1,6 +1,6 @@
 {
   "name": "dsh-audio-transcribe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Offline audio-to-text for DeepSeek Harness: transcribe local audio with the SenseVoice model, record system playback from a floating widget, and keep both fully local.",
   "type": "module",
   "main": "src/index.js",

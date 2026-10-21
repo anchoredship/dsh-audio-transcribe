@@ -18,12 +18,14 @@ export function binDir(packageRoot) {
 /**
  * Create the recorder controller bound to one apply() lifetime.
  * @param options.packageRoot - absolute package directory (holds bin/).
- * @param options.getRecordDir - returns the current storage directory.
+ * @param options.getRecordDir - async () => the current storage directory.
+ * @param options.getPerRecordingFolder - async () => whether to group each
+ *   recording into its own timestamped subfolder.
  * @param options.onFinished - called with the finished recording descriptor.
  * @param options.logger - cordis logger.
  */
 export function createRecorder(options) {
-  const { packageRoot, getRecordDir, onFinished, logger } = options
+  const { packageRoot, getRecordDir, getPerRecordingFolder, onFinished, logger } = options
   const exe = path.join(binDir(packageRoot), 'LoopbackCap.exe')
 
   /** @type {null | { child: any, file: string, startedAt: number, log: string }} */
@@ -62,11 +64,18 @@ export function createRecorder(options) {
     if (active) throw new Error('a recording is already running')
     if (!available()) throw new Error(`recorder binary not found at ${exe}`)
 
-    const dir = getRecordDir()
-    await fs.mkdir(dir, { recursive: true })
+    const root = await getRecordDir()
+    const perFolder = await getPerRecordingFolder()
 
+    // Two timestamp formats on purpose:
+    //   folder 2026-10-19_13-02-11/  — readable and sortable as a directory
+    //   file   system-audio.wav      — the folder already carries the time
+    // When grouping is off the timestamp moves into the filename instead, so
+    // recordings in one flat directory still do not collide.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_')
-    const file = path.join(dir, `system-audio-${stamp}.wav`)
+    const dir = perFolder ? path.join(root, stamp) : root
+    const file = path.join(dir, perFolder ? 'system-audio.wav' : `system-audio-${stamp}.wav`)
+    await fs.mkdir(dir, { recursive: true })
 
     const child = spawn(exe, [binDir(packageRoot), file, String(maxSeconds)], {
       windowsHide: true,
@@ -89,6 +98,10 @@ export function createRecorder(options) {
       } catch {
         /* nothing recorded */
       }
+      // Exit codes come from LoopbackCap: 0 ok, 3 no data, 4 captured but silent.
+      // A silent take is a legitimate WAV, not a failure — surface it as its own
+      // state so the UI can say "nothing was playing" instead of "broken file".
+      const silent = code === 3 || code === 4
       last = {
         file,
         name: path.basename(file),
@@ -96,7 +109,8 @@ export function createRecorder(options) {
         durationMs: Date.now() - state.startedAt,
         at: new Date().toISOString(),
         exitCode: code,
-        ok: bytes > 1024,
+        ok: bytes > 1024 && !silent,
+        silent,
         log: state.log.trim().slice(-400),
       }
       if (active === state) active = null
@@ -168,7 +182,71 @@ export function createRecorder(options) {
   return { available, status, start, stop }
 }
 
-/** List recorded WAV files in a directory, newest first. */
+/** Describe one WAV plus its transcript, or null when it vanished. */
+/**
+ * Whether a WAV file holds nothing but silence.
+ *
+ * Only the first 64 KiB is sampled: a silent capture is zero-filled throughout,
+ * so a sample is enough to label it, and reading the whole file for every row
+ * would make listing slow once a directory fills up.
+ */
+async function isSilentWav(file, size) {
+  // A 44-byte header with no frames at all counts as silent too.
+  if (size <= 64) return true
+  let handle
+  try {
+    handle = await fs.open(file, 'r')
+    const length = Math.min(65536, size - 44)
+    if (length <= 0) return true
+    const buf = Buffer.alloc(length)
+    await handle.read(buf, 0, length, 44)
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] !== 0) return false
+    }
+    return true
+  } catch {
+    return false
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+async function describeRecording(dir, name, group) {
+  const full = path.join(dir, name)
+  try {
+    const st = await fs.stat(full)
+    const txtPath = full.replace(/\.wav$/i, '.txt')
+    let transcript = null
+    try {
+      await fs.access(txtPath)
+      transcript = txtPath
+    } catch {
+      /* no transcript yet */
+    }
+    // In grouped mode every file is called system-audio.wav, so the folder name
+    // is what distinguishes one recording from another.
+    return {
+      name: group ? `${group}/${name}` : name,
+      path: full,
+      folder: group ?? null,
+      bytes: st.size,
+      mtime: st.mtime.toISOString(),
+      transcript,
+      silent: await isSilentWav(full, st.size),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * List recordings, newest first.
+ *
+ * Reads both layouts so a directory that already holds flat recordings keeps
+ * showing them after grouping is introduced:
+ *   flat     <dir>/system-audio-<stamp>.wav
+ *   grouped  <dir>/<stamp>/system-audio.wav
+ */
 export async function listRecordings(dir) {
   const out = []
   let entries
@@ -177,30 +255,27 @@ export async function listRecordings(dir) {
   } catch {
     return out
   }
+
   for (const e of entries) {
-    if (!e.isFile() || !/\.wav$/i.test(e.name)) continue
-    const full = path.join(dir, e.name)
-    try {
-      const st = await fs.stat(full)
-      const txtPath = full.replace(/\.wav$/i, '.txt')
-      let transcript = null
+    if (e.isDirectory()) {
+      let inner
       try {
-        await fs.access(txtPath)
-        transcript = txtPath
+        inner = await fs.readdir(path.join(dir, e.name), { withFileTypes: true })
       } catch {
-        /* no transcript yet */
+        continue
       }
-      out.push({
-        name: e.name,
-        path: full,
-        bytes: st.size,
-        mtime: st.mtime.toISOString(),
-        transcript,
-      })
-    } catch {
-      /* race with deletion */
+      for (const f of inner) {
+        if (!f.isFile() || !/\.wav$/i.test(f.name)) continue
+        const item = await describeRecording(path.join(dir, e.name), f.name, e.name)
+        if (item) out.push(item)
+      }
+      continue
     }
+    if (!e.isFile() || !/\.wav$/i.test(e.name)) continue
+    const item = await describeRecording(dir, e.name, null)
+    if (item) out.push(item)
   }
+
   out.sort((a, b) => (a.mtime < b.mtime ? 1 : -1))
   return out.slice(0, 30)
 }

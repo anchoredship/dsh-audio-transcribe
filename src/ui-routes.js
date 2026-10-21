@@ -115,18 +115,70 @@ export function mountAudioUi(root, options) {
   const { webServer, settings, directoryPicker, dshHome, packageRoot, transcribe, logger } = options
   const disposers = []
 
-  // ---- storage directory -------------------------------------------------
-  // Kept in the plugin's settings namespace when available so it survives a
-  // restart; falls back to a per-install default.
-  let recordDir = null
+  // ---- persistent preferences -------------------------------------------
+  // Stored in our own JSON file, not the settings service.
+  //
+  // `settings.mutate()` only writes volatile fields of an active *profile
+  // entry*; "audio-transcribe" is a plain namespace string, not an entry id, so
+  // a write through it is accepted and then dropped. That silent drop is why
+  // the chosen directory used to revert on every restart.
+  const configFile = path.join(dshHome, 'audio-transcribe', 'config.json')
+  let prefs = null
+
+  async function readConfig() {
+    try {
+      const parsed = JSON.parse(await fs.readFile(configFile, 'utf8'))
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  /** Write then rename, so a crash cannot leave a truncated config behind. */
+  async function writeConfig(patch) {
+    const next = { ...(await readConfig()), ...patch }
+    await fs.mkdir(path.dirname(configFile), { recursive: true })
+    const tmp = `${configFile}.tmp`
+    await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
+    await fs.rename(tmp, configFile)
+    prefs = next
+    return next
+  }
+
+  /**
+   * Cached view of the config, seeded once from disk.
+   * The in-flight promise is cached rather than the value, so concurrent
+   * requests (status polling overlaps easily) share one read instead of racing.
+   */
+  let prefsLoad = null
+  async function preferences() {
+    if (prefs) return prefs
+    if (!prefsLoad) {
+      prefsLoad = readConfig()
+        .then((value) => {
+          prefs = value
+          return value
+        })
+        .finally(() => {
+          prefsLoad = null
+        })
+    }
+    return prefsLoad
+  }
 
   /** Settings service, resolved on demand for the same reason as the picker. */
   function settingsService() {
     return settings ?? root.get?.('settings')
   }
 
-  function resolveRecordDir() {
-    if (recordDir) return recordDir
+  /**
+   * Current storage directory: saved config, then a settings-form value for
+   * users who set it that way, then the built-in default.
+   */
+  async function resolveRecordDir() {
+    const saved = await preferences()
+    if (typeof saved.recordDir === 'string' && saved.recordDir) return saved.recordDir
+
     let configured = ''
     try {
       const descriptors = settingsService()?.describe?.({ redactSecrets: true }) ?? []
@@ -136,19 +188,30 @@ export function mountAudioUi(root, options) {
     } catch {
       /* settings unavailable on this host */
     }
-    recordDir = configured || DEFAULT_RECORD_DIR(dshHome)
-    return recordDir
+    return configured || DEFAULT_RECORD_DIR(dshHome)
   }
 
   async function persistRecordDir(dir) {
-    recordDir = dir
-    const svc = settingsService()
-    if (!svc?.mutate) return { persisted: false }
     try {
-      await svc.mutate(SETTINGS_NS, [{ op: 'set', path: ['recordDir'], value: dir }])
+      await writeConfig({ recordDir: dir })
       return { persisted: true }
     } catch (error) {
       logger?.warn?.(`[audio-transcribe] could not persist recordDir: ${error?.message ?? error}`)
+      return { persisted: false, error: String(error?.message ?? error) }
+    }
+  }
+
+  /** Whether each recording gets its own timestamped subfolder (default on). */
+  async function perRecordingFolderEnabled() {
+    const saved = await preferences()
+    return saved.perRecordingFolder !== false
+  }
+
+  async function persistPerRecordingFolder(enabled) {
+    try {
+      await writeConfig({ perRecordingFolder: enabled === true })
+      return { persisted: true }
+    } catch (error) {
       return { persisted: false, error: String(error?.message ?? error) }
     }
   }
@@ -197,6 +260,7 @@ export function mountAudioUi(root, options) {
   const recorder = createRecorder({
     packageRoot,
     getRecordDir: resolveRecordDir,
+    getPerRecordingFolder: perRecordingFolderEnabled,
     onFinished: (recording) => void autoTranscribe(recording),
     logger,
   })
@@ -230,11 +294,16 @@ export function mountAudioUi(root, options) {
 
   route('exact', `${ROUTE_PREFIX}/status.json`, async (req, res) => {
     try {
-      const dir = resolveRecordDir()
-      const [status, files] = await Promise.all([recorder.status(), listRecordings(dir)])
+      const dir = await resolveRecordDir()
+      const [status, files, perFolder] = await Promise.all([
+        recorder.status(),
+        listRecordings(dir),
+        perRecordingFolderEnabled(),
+      ])
       json(res, 200, {
         ok: true,
         direction: dir,
+        perRecordingFolder: perFolder,
         status,
         files,
         busy: transcribing > 0,
@@ -269,7 +338,7 @@ export function mountAudioUi(root, options) {
   route('exact', `${ROUTE_PREFIX}/dir.json`, async (req, res) => {
     try {
       if (req.method === 'GET') {
-        json(res, 200, { ok: true, direction: resolveRecordDir() })
+        json(res, 200, { ok: true, direction: await resolveRecordDir() })
         return
       }
       const { dir } = await readBody(req)
@@ -287,6 +356,25 @@ export function mountAudioUi(root, options) {
       await ensureWritableDir(next)
       const persisted = await persistRecordDir(next)
       json(res, 200, { ok: true, direction: next, ...persisted })
+    } catch (error) {
+      json(res, 400, { ok: false, error: String(error?.message ?? error) })
+    }
+  })
+
+  // Toggle the per-recording subfolder behaviour. Kept separate from dir.json so
+  // each preference has its own explicit verb.
+  route('exact', `${ROUTE_PREFIX}/settings.json`, async (req, res) => {
+    try {
+      if (req.method === 'GET') {
+        json(res, 200, { ok: true, perRecordingFolder: await perRecordingFolderEnabled() })
+        return
+      }
+      const body = await readBody(req)
+      if (typeof body.perRecordingFolder !== 'boolean') {
+        throw new Error('perRecordingFolder must be a boolean')
+      }
+      const result = await persistPerRecordingFolder(body.perRecordingFolder)
+      json(res, 200, { ok: true, perRecordingFolder: body.perRecordingFolder, ...result })
     } catch (error) {
       json(res, 400, { ok: false, error: String(error?.message ?? error) })
     }
@@ -315,13 +403,13 @@ export function mountAudioUi(root, options) {
     }
   }
 
-  route('exact', `${ROUTE_PREFIX}/picker.json`, (req, res) => {
+  route('exact', `${ROUTE_PREFIX}/picker.json`, async (req, res) => {
     const cap = pickerCapability()
     if (!cap) {
       json(res, 200, { ok: true, kind: null })
       return
     }
-    json(res, 200, { ok: true, kind: cap.kind, direction: resolveRecordDir() })
+    json(res, 200, { ok: true, kind: cap.kind, direction: await resolveRecordDir() })
   })
 
   route('exact', `${ROUTE_PREFIX}/pick.json`, async (req, res) => {

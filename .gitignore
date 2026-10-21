@@ -7,6 +7,11 @@ node_modules/
 output/
 recordings/
 *.wav
+*.wav.stop
+
+# Scratch directories used by verification runs
+.verify-*/
+.verify*/
 
 # Secrets and environment files. This plugin needs neither today, but anyone
 # editing a fork might add one, and a committed .env is a leaked credential.

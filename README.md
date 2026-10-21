@@ -109,7 +109,35 @@ directly, without changing the default device or installing a driver.
 |---|---|
 | Default | `<dshHome>/audio-transcribe/recordings` |
 | Change it | **选择…** button (opens the OS folder chooser), or `POST /dsh-audio/dir.json` |
-| Persisted in | the plugin's `audio-transcribe` settings namespace |
+| Persisted in | `<dshHome>/audio-transcribe/config.json` — survives restarts |
+| Layout | one timestamped folder per recording (toggleable in the widget) |
+
+### Layout
+
+With **每次录音新建独立文件夹** enabled (the default), every take gets its own
+folder so the audio and its transcript stay together:
+
+```
+<recordDir>/
+└── 2026-10-21_13-02-11/
+    ├── system-audio.wav
+    └── system-audio.txt
+```
+
+Turn the option off and recordings land flat in `<recordDir>`, with the timestamp
+moved into the filename (`system-audio-2026-10-21_13-02-11.wav`) so they still do
+not collide.
+
+The list reads **both** layouts, so recordings made before grouping was
+introduced keep showing up.
+
+### Why a config file, not the settings service
+
+`settings.mutate()` only persists volatile fields of an active *profile entry*.
+This plugin is a bundle without its own entry id, so a write through that API is
+accepted and then silently dropped — which is why an early version reset the
+chosen directory on every restart. The plugin therefore owns a small JSON file
+and writes it atomically (temp file + rename).
 
 Changing the directory uses DSH's own directory-picker seam rather than a
 hand-rolled text box. That seam exposes a **capability**, not one fixed method
@@ -206,7 +234,16 @@ All routes are host-owned and mounted under `/dsh-audio`:
 | `/dsh-audio/start.json` | POST | Begin recording (`{ maxSeconds }`, capped at 7200) |
 | `/dsh-audio/stop.json` | POST | Stop and finalise the WAV |
 | `/dsh-audio/dir.json` | GET/POST | Read or change the storage directory |
+| `/dsh-audio/settings.json` | GET/POST | Per-recording-folder toggle |
+| `/dsh-audio/picker.json` | GET | Which directory-picker capability the host has |
+| `/dsh-audio/pick.json` | POST | Open the OS chooser and adopt the result |
 | `/dsh-audio/ui.js` | GET | The widget script |
+
+Every route passes a trust fence before it runs: a non-loopback `Host`, a
+cross-site `Sec-Fetch-Site`, or a mismatched `Origin` is answered with 403. The
+mutating routes accept only the method listed above; anything else gets 405.
+Without that fence, any page the user visits could start a recording or
+enumerate their recordings.
 
 ### How the widget gets injected
 
@@ -231,8 +268,21 @@ degrades to "no widget" instead of a broken app.
 
 `LoopbackCap.exe` watches for `<file>.stop` and finalises the WAV itself. Killing
 the process instead leaves the RIFF header unwritten, which every decoder reads
-as **0 seconds** — a 250 KB file that transcribes to nothing. The recorder only
-falls back to a hard kill if the child ignores the signal for 8 seconds.
+as **0 seconds** — a 250 KB file that transcribes to nothing.
+
+Two details make that reliable:
+
+**The read loop runs on its own thread.** In WASAPI loopback, a silent output
+device delivers no data at all, and `Read` blocks until data arrives. A
+single-threaded read-then-check loop therefore never reaches the stop-file check,
+so the capture ran until the plugin gave up and killed it — producing a
+truncated file. The reader now owns the buffer exclusively while the main thread
+only polls the stop file.
+
+**Silence is a normal outcome, not a failure.** Exit code 3 (no data) and 4
+(captured but silent) both produce a valid WAV with no audible content. The
+widget labels those takes **无声** rather than letting you open a file and
+conclude the recording is broken, and they are skipped by auto-transcription.
 
 ---
 

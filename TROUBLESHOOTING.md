@@ -85,19 +85,31 @@ The picker service mounts asynchronously (the auto chooser loads its backend
 through the loader after plugins start), so the widget asks again on each panel
 open rather than caching the first answer.
 
-## Transcription returns nothing
+## Recordings are empty, or the WAV will not open
 
-The recording probably succeeded — check the WAV's duration.
+The recording probably succeeded — check the WAV's duration and size.
 
 | Symptom | Cause |
 |---|---|
-| WAV is ~0 s but has bytes | The recorder was killed instead of stopped; the RIFF header never got written |
-| WAV is valid, transcript empty | Nothing audible was playing, or it played to a different output device |
-| Pure music | SenseVoice is a speech model; it has nothing to recognise |
+| File is **0 bytes** | The recorder was killed before writing the RIFF header. Fixed in 0.2.0; on 0.1.x this happened whenever the device was silent |
+| File has no sound, tagged **无声** | Normal: nothing was playing, or the output was muted. The WAV is valid |
+| File has sound but the transcript is empty | The audio played to a different output device than the one recorded |
+| Pure music, transcript empty | SenseVoice is a speech model; it has nothing to recognise |
+
+**Silence produces a valid file, not a failure.** Since 0.2.0 a silent take is a
+playable WAV tagged 无声 and skipped by auto-transcription. If you still get a
+0-byte file, the recorder did not finalise — report it with the `status.json`
+output, whose `last.log` shows how far the capture got.
 
 **The default output device matters.** Virtual and remote-desktop devices are
 common defaults; if you are listening on headphones but the default is a virtual
 cable, you will record silence. Check the device in Windows sound settings.
+
+## A red error stays on the widget
+
+Before 0.2.0 a single failed poll stuck to the panel until the page reloaded, so
+a healthy host could look broken. Update, or reload the DSH window. If the
+message returns after a reload, the host really is unreachable.
 
 ## `sherpa-onnx-node runtime not found`
 

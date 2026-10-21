@@ -26,6 +26,7 @@
     busy: false,
     editingDir: false,
     pickerKind: null,
+    perRecordingFolder: true,
     lastFile: null,
   }
 
@@ -71,6 +72,10 @@
     '.daw-mini:hover:not(:disabled){background:rgba(0,0,0,.05)}',
     '@media (prefers-color-scheme:dark){.daw-mini{border-color:rgba(255,255,255,.14)}.daw-mini:hover:not(:disabled){background:rgba(255,255,255,.08)}}',
     '.daw-mini:disabled{opacity:.45;cursor:default}',
+    '.daw-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12px;color:#1d1d1f}',
+    '@media (prefers-color-scheme:dark){.daw-toggle{color:#f5f5f7}}',
+    '.daw-toggle input{width:14px;height:14px;margin:0;accent-color:#0071e3;cursor:pointer}',
+    '.daw-toggleHint{font-size:11px;color:#8e8e93;padding-left:22px;margin-top:2px}',
     '.daw-files{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto}',
     '.daw-file{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.03);font-size:12px}',
     '@media (prefers-color-scheme:dark){.daw-file{background:rgba(255,255,255,.05)}}',
@@ -78,6 +83,8 @@
     '.daw-fileMeta{color:#8e8e93;flex:none;font-variant-numeric:tabular-nums}',
     '.daw-tag{flex:none;font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;background:rgba(52,199,89,.16);color:#248a3d}',
     '@media (prefers-color-scheme:dark){.daw-tag{background:rgba(48,209,88,.2);color:#30d158}}',
+    '.daw-tagSilent{background:rgba(142,142,147,.18);color:#6e6e73}',
+    '@media (prefers-color-scheme:dark){.daw-tagSilent{background:rgba(161,161,166,.22);color:#a1a1a6}}',
     '.daw-err{padding:8px 10px;border-radius:8px;background:rgba(255,59,48,.1);color:#c9271e;font-size:12px;line-height:1.45;word-break:break-word}',
     '@media (prefers-color-scheme:dark){.daw-err{background:rgba(255,69,58,.14);color:#ff6961}}',
     '.daw-empty{color:#8e8e93;font-size:12px;padding:4px 0}',
@@ -377,6 +384,41 @@
     }
     body.appendChild(field)
 
+    // per-recording subfolder toggle
+    var toggleRow = h('label', 'daw-toggle')
+    var checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.checked = state.perRecordingFolder !== false
+    checkbox.disabled = state.running
+    checkbox.addEventListener('change', function () {
+      var next = checkbox.checked
+      checkbox.disabled = true
+      api('/settings.json', { perRecordingFolder: next })
+        .then(function (data) {
+          state.perRecordingFolder = data.perRecordingFolder
+          state.error = ''
+          // refresh() repaints the panel, which rebuilds this control from the
+          // new state — so re-enabling here only matters if the repaint is
+          // skipped, but leaving it disabled would strand the user.
+          checkbox.disabled = false
+          return refresh()
+        })
+        .catch(function (err) {
+          // Put the box back where it was so the UI never lies about the state.
+          checkbox.checked = !next
+          state.error = err.message
+          checkbox.disabled = false
+          paint()
+        })
+    })
+    toggleRow.appendChild(checkbox)
+    toggleRow.appendChild(document.createTextNode('每次录音新建独立文件夹'))
+    body.appendChild(toggleRow)
+
+    if (state.running) {
+      body.appendChild(h('div', 'daw-toggleHint', '录制中无法更改'))
+    }
+
     // files
     var filesLabel = h('div', 'daw-label', '已录文件')
     body.appendChild(filesLabel)
@@ -387,10 +429,20 @@
     } else {
       state.files.slice(0, 12).forEach(function (file) {
         var item = h('div', 'daw-file')
-        item.appendChild(h('span', 'daw-fileName', file.name))
-        if (file.transcript) item.appendChild(h('span', 'daw-tag', '转写'))
+        // Grouped recordings all share the filename system-audio.wav, so the
+        // folder is the only thing that tells them apart.
+        var nameEl = h('span', 'daw-fileName', file.folder || file.name)
+        if (file.silent) nameEl.style.opacity = '.55'
+        item.appendChild(nameEl)
+        if (file.silent) {
+          // The file is a valid WAV, just empty — say so rather than letting the
+          // user open it and conclude the recording is broken.
+          item.appendChild(h('span', 'daw-tag daw-tagSilent', '无声'))
+        } else if (file.transcript) {
+          item.appendChild(h('span', 'daw-tag', '转写'))
+        }
         item.appendChild(h('span', 'daw-fileMeta', fmtBytes(file.bytes)))
-        item.title = file.path
+        item.title = file.silent ? file.path + '（录制期间没有检测到声音）' : file.path
         list.appendChild(item)
       })
     }
@@ -435,6 +487,13 @@
         state.direction = data.direction || ''
         state.files = data.files || []
         state.busy = !!data.busy
+        if (typeof data.perRecordingFolder === 'boolean') {
+          state.perRecordingFolder = data.perRecordingFolder
+        }
+        // A successful poll clears a stale failure. Without this a single
+        // transient error sticks to the panel until the page is reloaded,
+        // which makes a healthy host look broken.
+        state.error = ''
         paint()
       })
       .catch(function (err) {
