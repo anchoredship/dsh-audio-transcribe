@@ -16,7 +16,7 @@ Either allow the named package as pnpm suggests, or sidestep the registry path
 entirely:
 
 ```powershell
-git clone https://github.com/<owner>/dsh-audio-transcribe
+git clone https://github.com/Anchoredship/dsh-audio-transcribe
 dsh plugin --profile web add file:D:\absolute\path\to\dsh-audio-transcribe
 ```
 

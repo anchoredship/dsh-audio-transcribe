@@ -7,6 +7,14 @@ Everything runs locally: no API key, no upload, no network at transcription time
 
 > **Windows x64 only.** The recorder is a bundled WASAPI loopback binary.
 
+> **Tested against DSH Desktop 0.2.0-rc.2.** This plugin leans on two APIs the
+> upstream harness currently marks experimental: bundle loading via
+> `dsh.bundle.patch`, and index injection through `webserver/index-inject`.
+> Both have been stable across the 0.2.0-rc line, but a future DSH release may
+> change them. If the tools or the widget stop appearing after a DSH upgrade,
+> check this first rather than assuming the plugin is broken — see
+> [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ---
 
 ## Install
@@ -14,7 +22,7 @@ Everything runs locally: no API key, no upload, no network at transcription time
 ### Recommended: clone and install from the checkout
 
 ```powershell
-git clone https://github.com/<owner>/dsh-audio-transcribe
+git clone https://github.com/Anchoredship/dsh-audio-transcribe
 dsh plugin --profile web add file:D:\path\to\dsh-audio-transcribe
 ```
 
@@ -27,7 +35,7 @@ DSH peer packages from the symlink target and fails to find them.
 ### Alternative: install from GitHub
 
 ```powershell
-dsh plugin --profile web add github:<owner>/dsh-audio-transcribe
+dsh plugin --profile web add github:Anchoredship/dsh-audio-transcribe
 ```
 
 This fetches the sources and installs them through the registry. This plugin has
